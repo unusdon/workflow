@@ -7,7 +7,7 @@
  * Node imports, so this module remains safe to bundle for browsers.
  */
 
-import { getEventDataRefFields } from '@workflow/world';
+import { getEventDataRefFields } from '@workflow/world/event-metadata';
 import { parse, unflatten } from 'devalue';
 import {
   decompress,

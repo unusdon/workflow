@@ -1,4 +1,6 @@
-import { type Event, entityEventClass, envNumber } from '@workflow/world';
+import type { Event } from '@workflow/world';
+import { envNumber } from '@workflow/world/env-config';
+import { entityEventClass } from '@workflow/world/event-metadata';
 import { eventsLogger } from './logger.js';
 
 /**
