@@ -1,5 +1,5 @@
 import { type Context, runInContext } from 'node:vm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createContext } from './index.js';
 import {
   clearWorkflowScriptCache,
@@ -47,6 +47,7 @@ function runScript(code: string, filename: string, context: Context) {
 describe('script-cache', () => {
   afterEach(() => {
     clearWorkflowScriptCache();
+    vi.unstubAllEnvs();
   });
 
   it('returns the same compiled Script for identical (code, filename)', () => {
@@ -145,6 +146,14 @@ describe('script-cache', () => {
     // inserted bundle is retained and repeated lookups return the same Script.
     const latest = buildBundle(`edit-${editCount - 1}`);
     expect(getScript(latest, filename)).toBe(getScript(latest, filename));
+  });
+
+  it('retains every immutable source bundle in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    for (let i = 0; i < 12; i++) {
+      getScript(buildBundle(`source-${i}`), `source-${i}.ts`);
+    }
+    expect(workflowScriptCacheSize()).toBe(12);
   });
 
   it('keeps the most-recently-used bundle and evicts the stale one', () => {

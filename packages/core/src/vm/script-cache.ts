@@ -7,9 +7,8 @@ import { Script } from 'node:vm';
  * ---------------
  * Replaying a workflow re-evaluates the workflow bundle against a fresh VM
  * context on every iteration of the inline replay loop (see
- * `runWorkflow` in `../workflow.ts`). The bundle is a single string that
- * contains every workflow function in the app and registers them on
- * `globalThis.__private_workflows`. Previously each replay called
+ * `runWorkflow` in `../workflow.ts`). Each source bundle registers its
+ * workflow functions on `globalThis.__private_workflows`. Previously each replay called
  * `vm.runInContext(workflowCode, context, { filename })`, which RE-PARSES and
  * RE-COMPILES the entire bundle every time — O(N) full re-parses for a
  * sequential workflow of N steps, plus the same parse cost repeated across
@@ -44,32 +43,23 @@ import { Script } from 'node:vm';
  *
  * Bounding
  * --------
- * The top-level (`code`-keyed) map is an insertion-ordered LRU capped at
- * `MAX_BUNDLES` entries. In production this bound is never reached: a
- * deployment is its own process serving exactly one build-time bundle literal
- * (skew protection runs old versions as separate processes), so there is a
- * single `code` key for the process lifetime. The bound exists for dev/watch
- * mode, where the dev route re-reads `workflowCode` from disk and re-invokes
- * the entrypoint on every edit — each edit produces a NEW bundle string, which
+ * In production, a deployment's immutable set of source bundles naturally
+ * bounds this cache. In dev/watch mode, the top-level (`code`-keyed) map is an
+ * insertion-ordered LRU capped at `MAX_DEV_BUNDLES`: the dev route re-reads
+ * `workflowCode` from disk and re-invokes the entrypoint on every edit. Each
+ * edit produces a NEW bundle string, which
  * without a bound would pin every historical version forever (~0.8MB per edit,
- * growing monotonically with edit count). The dev path only ever needs the
- * latest bundle, so an LRU that keeps the few most-recent bundles and evicts
- * the rest preserves the pre-cache GC behaviour while still serving the
- * steady-state single-bundle case for free. The per-`filename` inner map is not
- * separately bounded: it is naturally bounded by the (small) number of workflow
- * source files in a bundle and is dropped wholesale when its parent `code`
- * entry is evicted.
+ * growing monotonically with edit count). A small LRU preserves the pre-cache
+ * GC behaviour while keeping recently exercised sources hot. The per-filename
+ * inner map is dropped wholesale when its parent `code` entry is evicted.
  */
 const scriptCache = new Map<string, Map<string, Script>>();
 
 /**
- * Max number of distinct bundle (`code`) versions to retain. One is enough for
- * production; a handful covers pathological dev hot-reload / repeated-rebuild
- * churn within a single long-lived process (e.g. a watch session or a test
- * file) without unbounded growth. Kept deliberately small — there is no value
- * in retaining stale bundles, only a memory cost.
+ * Max number of distinct bundle versions retained outside production. There is
+ * no value in pinning every stale dev build.
  */
-const MAX_BUNDLES = 8;
+const MAX_DEV_BUNDLES = 8;
 
 /**
  * Looks up the per-filename map for `code`, marking it most-recently-used.
@@ -108,7 +98,10 @@ export function getCachedWorkflowScript(
     scriptCache.set(code, byFilename);
     // Evict the least-recently-used bundle(s) when over the cap. New bundles
     // are appended at the end, so the oldest live at the front.
-    while (scriptCache.size > MAX_BUNDLES) {
+    while (
+      process.env.NODE_ENV !== 'production' &&
+      scriptCache.size > MAX_DEV_BUNDLES
+    ) {
       const oldest = scriptCache.keys().next().value;
       if (oldest === undefined) {
         break;
