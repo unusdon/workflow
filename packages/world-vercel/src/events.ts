@@ -49,7 +49,6 @@ import {
   getEventDataPayloadField,
   isHookEventRequiringExistence,
   type ListEventsByCorrelationIdParams,
-  type ListEventsParams,
   type PaginatedResponse,
   validateUlidTimestamp,
   type WorkflowRun,
@@ -62,7 +61,6 @@ import {
   createWorkflowRunStartedEventV4,
   getEventsByCorrelationIdV4,
   getEventV4,
-  getWorkflowRunEventsV4,
 } from './events-v4.js';
 import { decode as decodeRunId } from './run-id/index.js';
 import { cancelWorkflowRunV1, createWorkflowRunV1 } from './runs.js';
@@ -230,8 +228,7 @@ assertEventDataWireContractExhaustive<[Unhandled, Stale]>();
  * CBOR-encoded meta block of the same frame.
  *
  * Exported for unit tests (the meta allowlist is the eventData wire
- * contract — see the warning on EVENT_DATA_PAYLOAD_FIELD_BY_EVENT_TYPE in
- * @workflow/world).
+ * contract — see getEventDataPayloadField in @workflow/world).
  */
 export function splitEventDataForV4(data: AnyEventRequest): SplitEventData {
   // Some event types in the AnyEventRequest discriminated union (e.g.
@@ -429,13 +426,6 @@ export async function getEvent(
     params?.resolveData === 'none' ? 'lazy' : 'resolve',
     config
   );
-}
-
-export async function getWorkflowRunEvents(
-  params: ListEventsParams,
-  config?: APIConfig
-): Promise<PaginatedResponse<Event>> {
-  return getWorkflowRunEventsV4(params, config);
 }
 
 export async function getWorkflowRunEventsByCorrelationId(

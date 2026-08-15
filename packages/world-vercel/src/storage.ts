@@ -7,9 +7,9 @@ import {
   createWorkflowRunEvent,
   createWorkflowRunEventBatch,
   getEvent,
-  getWorkflowRunEvents,
   getWorkflowRunEventsByCorrelationId,
 } from './events.js';
+import { getWorkflowRunEventsV4 } from './events-v4.js';
 import { getHook, getHookByToken, listHooks } from './hooks.js';
 import { instrumentObject } from './instrumentObject.js';
 import {
@@ -53,7 +53,7 @@ export function createStorage(config?: APIConfig): Storage {
       createBatch: (runId, events, params) =>
         createWorkflowRunEventBatch(runId, events, params, config),
       get: (runId, eventId, params) => getEvent(runId, eventId, params, config),
-      list: (params) => getWorkflowRunEvents(params, config),
+      list: (params) => getWorkflowRunEventsV4(params, config),
       listByCorrelationId: (params) =>
         getWorkflowRunEventsByCorrelationId(params, config),
     },

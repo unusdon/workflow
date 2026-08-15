@@ -8,10 +8,10 @@ import { MockAgent } from 'undici';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createWorkflowRunEvent,
-  getWorkflowRunEvents,
   getWorkflowRunEventsByCorrelationId,
   splitEventDataForV4,
 } from './events.js';
+import { getWorkflowRunEventsV4 } from './events-v4.js';
 import { encodeFrame, V4_FRAME_CONTENT_TYPE } from './frames.js';
 import { encode as encodeRunId, REGION_IDS } from './run-id/index.js';
 import { WORKFLOW_SERVER_URL_OVERRIDE } from './utils.js';
@@ -1241,7 +1241,7 @@ describe('getWorkflowRunEvents remoteRefBehavior mapping', () => {
         headers: { 'content-type': V4_FRAME_CONTENT_TYPE },
       });
 
-    const result = await getWorkflowRunEvents(
+    const result = await getWorkflowRunEventsV4(
       { runId: 'wrun_1', resolveData: 'none' },
       { token: 'test-token', dispatcher: agent }
     );
@@ -1276,7 +1276,7 @@ describe('getWorkflowRunEvents remoteRefBehavior mapping', () => {
       });
 
     // No resolveData → defaults to 'all' → resolve.
-    const result = await getWorkflowRunEvents(
+    const result = await getWorkflowRunEventsV4(
       { runId: 'wrun_1' },
       { token: 'test-token', dispatcher: agent }
     );
@@ -1301,7 +1301,7 @@ describe('getWorkflowRunEvents remoteRefBehavior mapping', () => {
         headers: { 'content-type': V4_FRAME_CONTENT_TYPE },
       });
 
-    await getWorkflowRunEvents(
+    await getWorkflowRunEventsV4(
       { runId: 'wrun_1' },
       { token: 'test-token', dispatcher: agent }
     );
@@ -1337,7 +1337,7 @@ describe('getWorkflowRunEvents remoteRefBehavior mapping', () => {
       });
 
     await expect(
-      getWorkflowRunEvents(
+      getWorkflowRunEventsV4(
         { runId: 'wrun_1' },
         { token: 'test-token', dispatcher: agent }
       )
@@ -1389,7 +1389,7 @@ describe('getWorkflowRunEvents legacy structured-error compatibility', () => {
         headers: { 'content-type': V4_FRAME_CONTENT_TYPE },
       });
 
-    const result = await getWorkflowRunEvents(
+    const result = await getWorkflowRunEventsV4(
       { runId: 'wrun_1', resolveData: 'all' },
       { token: 'test-token', dispatcher: agent }
     );
@@ -1470,7 +1470,7 @@ describe('getWorkflowRunEvents hasMore mapping', () => {
     const agent = mockAgent();
     mockListResponse(agent, { _end: 1, next: 'eid:last', hasMore: false });
 
-    const result = await getWorkflowRunEvents(
+    const result = await getWorkflowRunEventsV4(
       { runId: 'wrun_1' },
       { token: 'test-token', dispatcher: agent }
     );
@@ -1490,7 +1490,7 @@ describe('getWorkflowRunEvents hasMore mapping', () => {
       { limit: '500', remoteRefBehavior: 'resolve' }
     );
 
-    const result = await getWorkflowRunEvents(
+    const result = await getWorkflowRunEventsV4(
       { runId: 'wrun_1', pagination: { limit: 500 } },
       { token: 'test-token', dispatcher: agent }
     );
@@ -1504,7 +1504,7 @@ describe('getWorkflowRunEvents hasMore mapping', () => {
     mockListResponse(agent, { _end: 1, next: 'cursor-2' });
 
     await expect(
-      getWorkflowRunEvents(
+      getWorkflowRunEventsV4(
         { runId: 'wrun_1' },
         { token: 'test-token', dispatcher: agent }
       )
