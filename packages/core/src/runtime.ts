@@ -526,6 +526,24 @@ type ReplayEventLog =
   | ({ type: 'ready' } & LoadedEventLog)
   | ({ type: 'loadAfter'; cursor: string } & LoadedEventLog);
 
+type ReplayEncryptionKeySource =
+  | { type: 'run'; run: WorkflowRun }
+  | { type: 'deployment'; deploymentId: string };
+
+interface ReplayPayloads {
+  encryptionKey: DecryptionKey | undefined;
+  cache: ReplayPayloadCache;
+}
+
+type ReplayPayloadCacheState =
+  | { type: 'waitingForKey'; events: Event[] }
+  | {
+      type: 'resolvingKey';
+      events: Event[];
+      payloads: Promise<ReplayPayloads>;
+    }
+  | { type: 'ready'; payloads: ReplayPayloads };
+
 function nextEventLogLoad(log: LoadedEventLog): ReplayEventLog {
   if (log.cursor === null) {
     return { type: 'loadAll' };
@@ -1028,55 +1046,72 @@ export function workflowEntrypoint(
                   // queue payload. This starts key resolution and payload
                   // preparation before the remainder of the event log arrives,
                   // without guessing the key for a cross-deployment run.
-                  let replayEncryptionKey:
-                    | Promise<DecryptionKey | undefined>
-                    | undefined;
-                  let streamedPayloadCache: ReplayPayloadCache | undefined;
-                  const eventsWaitingForKey: Event[] = [];
-                  const activatePayloadCache = (
-                    key: DecryptionKey | undefined
-                  ): ReplayPayloadCache => {
-                    if (!streamedPayloadCache) {
-                      streamedPayloadCache = new ReplayPayloadCache(key);
-                      for (const event of eventsWaitingForKey) {
-                        streamedPayloadCache.prepareEvent(event);
-                      }
-                      eventsWaitingForKey.length = 0;
-                    }
-                    return streamedPayloadCache;
+                  let replayPayloadState: ReplayPayloadCacheState = {
+                    type: 'waitingForKey',
+                    events: [],
                   };
-                  const getReplayEncryptionKey = (
-                    runOrId: WorkflowRun | string,
-                    context?: Record<string, unknown>
-                  ): Promise<DecryptionKey | undefined> => {
-                    if (!replayEncryptionKey) {
-                      replayEncryptionKey = resolveRunEncryptionKey(
-                        world,
-                        runOrId,
-                        context
-                      );
-                      void replayEncryptionKey.then(
-                        activatePayloadCache,
-                        () => {}
-                      );
+                  const getReplayPayloads = (
+                    source: ReplayEncryptionKeySource
+                  ): ReplayPayloads | Promise<ReplayPayloads> => {
+                    switch (replayPayloadState.type) {
+                      case 'waitingForKey': {
+                        const events = replayPayloadState.events;
+                        const encryptionKey =
+                          source.type === 'run'
+                            ? resolveRunEncryptionKey(world, source.run)
+                            : resolveRunEncryptionKey(world, runId, {
+                                deploymentId: source.deploymentId,
+                              });
+                        const resolving = encryptionKey.then(
+                          (encryptionKey) => {
+                            const cache = new ReplayPayloadCache(encryptionKey);
+                            for (const event of events) {
+                              cache.prepareEvent(event);
+                            }
+                            const payloads = { encryptionKey, cache };
+                            replayPayloadState = {
+                              type: 'ready',
+                              payloads,
+                            };
+                            return payloads;
+                          }
+                        );
+                        replayPayloadState = {
+                          type: 'resolvingKey',
+                          events,
+                          payloads: resolving,
+                        };
+                        void resolving.catch(() => {});
+                        return resolving;
+                      }
+                      case 'resolvingKey':
+                      case 'ready':
+                        return replayPayloadState.payloads;
                     }
-                    return replayEncryptionKey;
+                    replayPayloadState satisfies never;
                   };
                   const onReplayEvent = (event: Event): void => {
                     const deploymentId = replayEventDeploymentId(event);
                     if (deploymentId) {
-                      void getReplayEncryptionKey(runId, {
+                      void getReplayPayloads({
+                        type: 'deployment',
                         deploymentId,
                       });
                     }
-                    if (streamedPayloadCache) {
-                      streamedPayloadCache.prepareEvent(event);
-                    } else {
-                      eventsWaitingForKey.push(event);
+                    switch (replayPayloadState.type) {
+                      case 'waitingForKey':
+                      case 'resolvingKey':
+                        replayPayloadState.events.push(event);
+                        return;
+                      case 'ready':
+                        replayPayloadState.payloads.cache.prepareEvent(event);
+                        return;
                     }
+                    replayPayloadState satisfies never;
                   };
                   if (runInput?.deploymentId) {
-                    void getReplayEncryptionKey(runId, {
+                    void getReplayPayloads({
+                      type: 'deployment',
                       deploymentId: runInput.deploymentId,
                     });
                   }
@@ -1401,6 +1436,7 @@ export function workflowEntrypoint(
                       // incremental load starts above the hole and never
                       // returns it.
                       eventLog = { type: 'loadAll' };
+                      replayPayloadCache.resetScan();
                     }
                     runtimeLogger.warn(
                       'Event creation rejected as stale; restarting replay in-process',
@@ -2618,10 +2654,11 @@ export function workflowEntrypoint(
                   // Worlds that do not implement streamed observation still
                   // resolve from the materialized run. This is also the final
                   // cross-deployment-safe source of truth.
-                  const encryptionKey =
-                    await getReplayEncryptionKey(workflowRun);
-                  const replayPayloadCache =
-                    activatePayloadCache(encryptionKey);
+                  const { encryptionKey, cache: replayPayloadCache } =
+                    await getReplayPayloads({
+                      type: 'run',
+                      run: workflowRun,
+                    });
 
                   // The live VM parked at the previous boundary, when the
                   // retention decision kept it. null → this iteration cold-
@@ -3300,6 +3337,7 @@ export function workflowEntrypoint(
                           // The cursor is deliberately left alone: the report
                           // is a lower bound on what was skipped, so the next
                           // incremental read still has to cover the same range.
+                          replayPayloadCache.resetScan();
                         }
 
                         // Open hooks/waits in the log as loaded for this

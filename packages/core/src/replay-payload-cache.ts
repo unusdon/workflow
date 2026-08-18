@@ -6,15 +6,29 @@ import {
 } from './serialization/replay.js';
 
 const WORKFLOW_INPUT = Symbol('workflow-input');
+const MAX_MEMOIZED_PRIMITIVE_CHARACTERS = 16 * 1024 * 1024;
 type ReplayPayloadKey = string | typeof WORKFLOW_INPUT;
-type CachedPreparation = Uint8Array | Promise<Uint8Array>;
 
-function isCacheablePrimitive(value: unknown): boolean {
+/** Copy a view only when retaining it would also retain unrelated bytes. */
+function compactOwnedBytes(data: Uint8Array): Uint8Array {
+  return data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+    ? data
+    : data.slice();
+}
+
+function cacheablePrimitiveCharacters(value: unknown): number | undefined {
   const type = typeof value;
-  return (
-    value === null ||
-    (type !== 'object' && type !== 'function' && type !== 'symbol')
-  );
+  if (value === null) return 0;
+  if (type === 'string') {
+    return (value as string).length;
+  }
+  if (type === 'bigint') {
+    return (value as bigint).toString().length;
+  }
+  if (type === 'object' || type === 'function' || type === 'symbol') {
+    return undefined;
+  }
+  return 0;
 }
 
 /**
@@ -23,19 +37,20 @@ function isCacheablePrimitive(value: unknown): boolean {
  * The cache retains VM-independent decrypt/decompress output across fresh VMs.
  * Deserialization still runs against each VM's globals so object graphs and
  * Workflow objects remain realm-local. Primitive final values are safe to
- * share and skip that repeated deserialization entirely.
+ * share and skip that repeated deserialization entirely, within a bounded
+ * character budget because their prepared bytes remain cached too.
  *
  * Key lookup is deliberately outside this class. The runtime creates the
- * cache once the run's key has resolved, then feeds it decoded events. Most
- * Node preparation is synchronous; only codecs that are inherently async
- * leave a Promise in the cache.
+ * cache once the run's key has resolved, then feeds it decoded events.
  */
 export class ReplayPayloadCache {
   private readonly preparations = new Map<
     ReplayPayloadKey,
-    CachedPreparation
+    Promise<Uint8Array>
   >();
   private readonly primitiveValues = new Map<string, unknown>();
+  private memoizedPrimitiveCharacters = 0;
+  private nextUnpreparedEventIndex = 0;
 
   constructor(
     private readonly encryptionKey?: DecryptionKey,
@@ -65,7 +80,19 @@ export class ReplayPayloadCache {
   /** Prepare every payload not already seen through the event stream. */
   prepareAll(workflowRun: WorkflowRun, events: Event[]): void {
     this.cachePayload(WORKFLOW_INPUT, workflowRun.input);
-    for (const event of events) this.prepareEvent(event);
+    for (
+      let index = this.nextUnpreparedEventIndex;
+      index < events.length;
+      index++
+    ) {
+      this.prepareEvent(events[index]);
+    }
+    this.nextUnpreparedEventIndex = events.length;
+  }
+
+  /** Rescan after an event log is replaced or reordered. */
+  resetScan(): void {
+    this.nextUnpreparedEventIndex = 0;
   }
 
   getWorkflowInput(
@@ -96,9 +123,16 @@ export class ReplayPayloadCache {
   }
 
   private cachePrimitive(eventId: string, value: unknown): unknown {
-    if (isCacheablePrimitive(value)) {
-      this.primitiveValues.set(eventId, value);
+    const characters = cacheablePrimitiveCharacters(value);
+    if (
+      characters === undefined ||
+      this.memoizedPrimitiveCharacters + characters >
+        MAX_MEMOIZED_PRIMITIVE_CHARACTERS
+    ) {
+      return value;
     }
+    this.primitiveValues.set(eventId, value);
+    this.memoizedPrimitiveCharacters += characters;
     return value;
   }
 
@@ -107,27 +141,11 @@ export class ReplayPayloadCache {
       return;
     }
 
-    let preparation: CachedPreparation;
-    try {
-      preparation = this.preparer(value, this.encryptionKey);
-    } catch (error) {
-      // Preparation is speculative. Preserve a synchronous failure for the
-      // ordered consumer without failing event loading or creating an
-      // unhandled rejection.
-      preparation = Promise.reject(error);
-    }
+    const preparation = this.preparer(value, this.encryptionKey).then(
+      compactOwnedBytes
+    );
     this.preparations.set(cacheKey, preparation);
-
-    if (preparation instanceof Promise) {
-      void preparation.then(
-        (prepared) => {
-          if (this.preparations.get(cacheKey) === preparation) {
-            this.preparations.set(cacheKey, prepared);
-          }
-        },
-        () => {}
-      );
-    }
+    void preparation.catch(() => {});
   }
 
   private getPayload(
@@ -142,7 +160,6 @@ export class ReplayPayloadCache {
       throw new Error('Replay payload preparation was not cached');
     }
 
-    if (!(prepared instanceof Promise)) return prepared;
     return prepared.catch((error) => {
       if (this.preparations.get(cacheKey) === prepared) {
         this.preparations.delete(cacheKey);

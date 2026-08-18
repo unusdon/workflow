@@ -1221,34 +1221,8 @@ export function getQueueOverhead(message: { requestedAt?: Date }) {
 }
 
 /**
- * Returns a memoized accessor for a run's full encryption capability.
- *
- * The first call resolves the run's key material via
- * `world.getEncryptionKeyForRun` (which may do HKDF derivation locally on
- * Vercel, or a network fetch from external contexts) and derives a
- * {@link PayloadKey} from it; subsequent calls await the same cached promise.
- * If the world doesn't support encryption or the run has no key configured,
- * the cached value is `undefined`.
- *
- * The resolved value is deliberately the *full* capability — the symmetric AES
- * key plus the run's X25519 keypair — not just a `CryptoKey`. A run reading
- * its own event log can encounter sealed (`encp`) payloads that another run
- * wrote to it (a cross-deployment hook resumption, say), and opening those
- * needs the keypair. Resolving only the symmetric key would leave those
- * payloads unopenable and wedge the run.
- *
- * Used by step / workflow handlers to defer the (potentially expensive)
- * key fetch until the first code path that actually needs it — typically
- * input hydration on the success path, or error dehydration on a failure
- * path. Both paths can race-call the accessor without triggering duplicate
- * fetches.
- *
- * Errors thrown by `getEncryptionKeyForRun` propagate to every caller
- * (the cached promise rejects). This is intentional: when encryption is
- * configured, we never want to silently fall back to plaintext
- * serialization. A propagated error in an event-emission path leaves the
- * outer try/catch to log and surface the issue; the queue's redelivery
- * semantics will retry the key fetch on the next attempt.
+ * Resolves a run's full encryption capability: its symmetric key and X25519
+ * keypair. The keypair is required to open sealed cross-deployment payloads.
  */
 export async function resolveRunEncryptionKey(
   world: World,
@@ -1268,6 +1242,7 @@ export async function resolveRunEncryptionKey(
   return rawKey ? await deriveRunPayloadKeys(rawKey) : undefined;
 }
 
+/** Returns a lazy accessor that shares the first key lookup and its outcome. */
 export function memoizeEncryptionKey(
   world: World,
   runOrId: WorkflowRun | string,
