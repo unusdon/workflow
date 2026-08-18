@@ -137,7 +137,7 @@ export interface WorkflowOrchestratorContext {
   globalThis: typeof globalThis;
   /**
    * Increments when a suspension is accepted and on every retained-session
-   * resume. Step and hook signals capture it so stale signals no-op.
+   * resume. Step, hook, and attribute signals capture it so stale signals no-op.
    */
   suspensionGeneration: number;
   eventsConsumer: EventsConsumer;

@@ -3311,14 +3311,14 @@ export function workflowEntrypoint(
                           retainedSession &&
                           (!isVmRetentionEnabled() ||
                             !suspensionResult.serializationWasPassive ||
-                            err.stepCount === 0 ||
+                            (err.stepCount === 0 && err.attributeCount === 0) ||
                             !err.steps.every((item) => {
                               switch (item.type) {
                                 case 'step':
                                 case 'hook':
+                                case 'attribute':
                                   return true;
                                 case 'wait':
-                                case 'attribute':
                                   return false;
                                 default:
                                   item satisfies never;
