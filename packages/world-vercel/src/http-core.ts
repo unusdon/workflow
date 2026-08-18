@@ -487,6 +487,8 @@ export interface InstrumentedFetchOptions extends HttpClientSpanOptions {
    * connections stop delivering (see noteEventsTransportOutcome).
    */
   onTransportOutcome?: (error?: unknown) => void;
+  /** Let a streaming body consumer report success after it finishes. */
+  deferTransportSuccess?: boolean;
 }
 
 /**
@@ -520,6 +522,7 @@ export async function instrumentedFetch(
     attributes,
     durationAttribute,
     onTransportOutcome,
+    deferTransportSuccess = false,
   } = opts;
   const label = logLabel ?? url;
 
@@ -601,7 +604,9 @@ export async function instrumentedFetch(
         throw error;
       }
       const ms = Date.now() - start;
-      onTransportOutcome?.();
+      if (!deferTransportSuccess || !response.ok) {
+        onTransportOutcome?.();
+      }
 
       httpLog(method, label, response, ms);
       recordClientSpanStatus(span, response.status);
