@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 
 export const WORKFLOW_BUNDLE_DIRECTORY = 'workflow-bundles';
 
-const WORKFLOW_BUNDLE_FILE = /^\d+(?:-[a-f0-9]{16})?\.mjs$/;
+const WORKFLOW_BUNDLE_FILE =
+  /^(?:\d+(?:-[a-f0-9]{16})?|serializer-[a-f0-9]{16})\.mjs$/;
 
 export function isWorkflowBundleFileName(fileName: string): boolean {
   return WORKFLOW_BUNDLE_FILE.test(fileName);
@@ -27,7 +28,10 @@ export function findWorkflowBundleFileNames(routeCode: string): string[] {
   return [...fileNames];
 }
 
-export function workflowBundleFileName(index: number, code: string): string {
+export function workflowBundleFileName(
+  index: number | 'serializer',
+  code: string
+): string {
   const hash = createHash('sha256').update(code).digest('hex').slice(0, 16);
   return `${index}-${hash}.mjs`;
 }

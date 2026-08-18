@@ -48,6 +48,7 @@ import { monotonicFactory } from 'ulid';
 import { runtimeLogger } from '../logger.js';
 import type { DecryptionKey } from '../serialization/encryption.js';
 import { decodePayload } from '../serialization/payload.js';
+import { WORKFLOW_SERIALIZER_REGISTRY_FILENAME } from '../source-map.js';
 import {
   getReplayTimeoutMs,
   isQuickJSBaselineSnapshotEnabled,
@@ -202,6 +203,8 @@ export interface QuickJSRuntimeResult {
 }
 
 export interface QuickJSRuntimeOptions {
+  /** Shared serializer registration code evaluated before input hydration. */
+  serializerRegistryCode?: string;
   /** The compiled workflow bundle code (workflow mode output from SWC) */
   workflowCode: string;
   /** The workflow ID (e.g. "workflow//./workflows/1_simple//simple") */
@@ -1157,7 +1160,12 @@ type BaselineEntry =
     }
   | { state: 'ineligible'; reason: string };
 
-const baselineCache = new Map<string, Promise<BaselineEntry>>();
+type CachedBaseline = {
+  serializerRegistryCode: string | undefined;
+  entry: Promise<BaselineEntry>;
+};
+
+const baselineCache = new Map<string, CachedBaseline>();
 const BASELINE_CACHE_MAX_ENTRIES = 4;
 
 /** Test-only: reset the baseline cache between test cases. */
@@ -1169,7 +1177,7 @@ export function __clearBaselineSnapshotCacheForTests(): void {
 export async function __peekBaselineEntryForTests(
   workflowCode: string
 ): Promise<BaselineEntry | undefined> {
-  return baselineCache.get(workflowCode);
+  return baselineCache.get(workflowCode)?.entry;
 }
 
 /**
@@ -1179,6 +1187,7 @@ export async function __peekBaselineEntryForTests(
  * re-evaluates and produces the real, source-mapped error.
  */
 async function prepareBaselineSnapshot(
+  serializerRegistryCode: string | undefined,
   workflowCode: string,
   workflowId: string
 ): Promise<BaselineEntry> {
@@ -1246,8 +1255,15 @@ async function prepareBaselineSnapshot(
 
     clockReads = 0; // only count reads made by the bundle itself
     try {
-      // Workflow-independent filename — see BASELINE_BUNDLE_FILENAME.
+      // Preserve the monolithic bundle's workflow-before-serializer module
+      // evaluation order while still registering every class before hydration.
       vm.evalCode(workflowCode, BASELINE_BUNDLE_FILENAME).dispose();
+      if (serializerRegistryCode) {
+        vm.evalCode(
+          serializerRegistryCode,
+          WORKFLOW_SERIALIZER_REGISTRY_FILENAME
+        ).dispose();
+      }
     } catch {
       // Let the fresh path re-evaluate and surface the real error with
       // proper filename / source-map handling.
@@ -1290,19 +1306,30 @@ async function prepareBaselineSnapshot(
  * returns `ineligible`) is evicted so a later invocation can retry.
  */
 function getBaselineEntry(
+  serializerRegistryCode: string | undefined,
   workflowCode: string,
   workflowId: string
 ): Promise<BaselineEntry> {
-  let entry = baselineCache.get(workflowCode);
-  if (!entry) {
-    if (baselineCache.size >= BASELINE_CACHE_MAX_ENTRIES) {
-      const oldest = baselineCache.keys().next().value;
-      if (oldest !== undefined) baselineCache.delete(oldest);
-    }
-    entry = prepareBaselineSnapshot(workflowCode, workflowId);
-    baselineCache.set(workflowCode, entry);
-    entry.catch(() => baselineCache.delete(workflowCode));
+  const cached = baselineCache.get(workflowCode);
+  if (cached && cached.serializerRegistryCode === serializerRegistryCode) {
+    return cached.entry;
   }
+  if (!cached && baselineCache.size >= BASELINE_CACHE_MAX_ENTRIES) {
+    const oldest = baselineCache.keys().next().value;
+    if (oldest !== undefined) baselineCache.delete(oldest);
+  }
+  const entry = prepareBaselineSnapshot(
+    serializerRegistryCode,
+    workflowCode,
+    workflowId
+  );
+  const next = { serializerRegistryCode, entry };
+  baselineCache.set(workflowCode, next);
+  entry.catch(() => {
+    if (baselineCache.get(workflowCode) === next) {
+      baselineCache.delete(workflowCode);
+    }
+  });
   return entry;
 }
 
@@ -1343,7 +1370,13 @@ export async function runQuickJSWorkflow(
 export async function startQuickJSWorkflow(
   options: QuickJSRuntimeOptions
 ): Promise<QuickJSWorkflowSession> {
-  const { workflowCode, workflowId, workflowRun, events } = options;
+  const {
+    serializerRegistryCode,
+    workflowCode,
+    workflowId,
+    workflowRun,
+    events,
+  } = options;
 
   const startedAt = workflowRun.startedAt ? +workflowRun.startedAt : Date.now();
 
@@ -1401,7 +1434,11 @@ export async function startQuickJSWorkflow(
   let baselineSerdeRootPtr: number | undefined;
   if (isQuickJSBaselineSnapshotEnabled()) {
     try {
-      const entry = await getBaselineEntry(workflowCode, workflowId);
+      const entry = await getBaselineEntry(
+        serializerRegistryCode,
+        workflowCode,
+        workflowId
+      );
       if (entry.state === 'ready') {
         baselineSnapshot = entry.snapshot;
         baselineSerdeRootPtr = entry.serdeRootPtr;
@@ -1532,6 +1569,12 @@ export async function startQuickJSWorkflow(
     if (!baselineSnapshot) {
       try {
         vm.evalCode(workflowCode, workflowId || 'workflow.js').dispose();
+        if (serializerRegistryCode) {
+          vm.evalCode(
+            serializerRegistryCode,
+            WORKFLOW_SERIALIZER_REGISTRY_FILENAME
+          ).dispose();
+        }
       } catch (err) {
         return makeSettledSession(
           extractError(vm, err, 'Workflow evaluation failed')

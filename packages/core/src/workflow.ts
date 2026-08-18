@@ -31,6 +31,7 @@ import {
   dehydrateWorkflowReturnValue,
   hydrateWorkflowArguments,
 } from './serialization.js';
+import { WORKFLOW_SERIALIZER_REGISTRY_FILENAME } from './source-map.js';
 import { createUseStep } from './step.js';
 import {
   BODY_INIT_SYMBOL,
@@ -125,6 +126,7 @@ async function drainPendingQueueItems(
 
 /** Everything needed to cold-start a workflow VM over an event log. */
 interface WorkflowSessionOptions {
+  readonly serializerRegistryCode?: string;
   readonly workflowCode: string;
   readonly workflowRun: WorkflowRun;
   readonly events: Event[];
@@ -320,6 +322,7 @@ async function createWorkflowSession(options: WorkflowSessionOptions) {
 
 async function createWorkflowSessionInner(
   {
+    serializerRegistryCode,
     workflowCode,
     workflowRun,
     events,
@@ -1088,9 +1091,14 @@ async function createWorkflowSessionInner(
   // Reuse compiled scripts by `(code, filename)`: compilation is deterministic
   // and the filename preserves workflow source attribution in stack traces.
   // The bundle registers workflows on `globalThis.__private_workflows`.
-  const { bundleScript, workflowLookupScript } = await trace(
-    'workflow.bundle.compile',
-    async (span) => {
+  const { serializerRegistryScript, bundleScript, workflowLookupScript } =
+    await trace('workflow.bundle.compile', async (span) => {
+      const serializerRegistry = serializerRegistryCode
+        ? getCachedWorkflowScript(
+            serializerRegistryCode,
+            WORKFLOW_SERIALIZER_REGISTRY_FILENAME
+          )
+        : undefined;
       const bundle = getCachedWorkflowScript(workflowCode, filename);
       const lookup = getCachedWorkflowScript(workflowLookupCode, filename);
       span?.setAttributes({
@@ -1101,13 +1109,14 @@ async function createWorkflowSessionInner(
         ...Attribute.WorkflowBundleCompileCacheHit(bundle.cacheHit),
       });
       return {
+        serializerRegistryScript: serializerRegistry?.script,
         bundleScript: bundle.script,
         workflowLookupScript: lookup.script,
       };
-    }
-  );
+    });
   const workflowFn = await trace('workflow.bundle.evaluate', async () => {
     bundleScript.runInContext(context);
+    serializerRegistryScript?.runInContext(context);
     return workflowLookupScript.runInContext(context);
   });
 

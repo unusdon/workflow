@@ -242,9 +242,11 @@ export async function extractWorkflowGraphs(bundlePath: string): Promise<{
   try {
     const bundleCode = await readFile(bundlePath, 'utf8');
     const lazyBundleDir = join(dirname(bundlePath), WORKFLOW_BUNDLE_DIRECTORY);
-    const lazyBundleFiles = findWorkflowBundleFileNames(bundleCode).sort(
-      (left, right) => Number.parseInt(left, 10) - Number.parseInt(right, 10)
-    );
+    const lazyBundleFiles = findWorkflowBundleFileNames(bundleCode)
+      .filter((file) => /^\d/.test(file))
+      .sort(
+        (left, right) => Number.parseInt(left, 10) - Number.parseInt(right, 10)
+      );
     const graphs: Record<string, Record<string, ManifestWorkflowEntry>> = {};
     const mergeWorkflowCode = (workflowCode: string) => {
       const ast = parseSync(workflowCode, {

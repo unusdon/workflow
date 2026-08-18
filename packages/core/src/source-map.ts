@@ -1,5 +1,9 @@
 import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping';
 
+/** Synthetic filename used when evaluating shared serializer registration. */
+export const WORKFLOW_SERIALIZER_REGISTRY_FILENAME =
+  'workflow-serializer-registry.js';
+
 /** Marker prefix of an inline source map comment emitted by bundlers. */
 const INLINE_SOURCE_MAP_MARKER =
   '//# sourceMappingURL=data:application/json;base64,';

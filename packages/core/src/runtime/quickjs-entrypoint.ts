@@ -38,7 +38,11 @@ import {
   type RunPayloadKeys,
 } from '../serialization/encryption.js';
 import { dehydrateRunError, hydrateRunError } from '../serialization.js';
-import { remapErrorStack, stripInlineSourceMap } from '../source-map.js';
+import {
+  remapErrorStack,
+  stripInlineSourceMap,
+  WORKFLOW_SERIALIZER_REGISTRY_FILENAME,
+} from '../source-map.js';
 import * as Attribute from '../telemetry/semantic-conventions.js';
 import { serializeTraceCarrier } from '../telemetry.js';
 import {
@@ -672,6 +676,26 @@ async function dispatchPendingOps(params: {
   return { createdAttributeEvent, createdGetConflictHook, queuedStepCids };
 }
 
+function remapWorkflowStack(
+  stack: string,
+  workflowName: string,
+  workflowCode: string,
+  serializerRegistryCode?: string
+): string {
+  let remapped = stack;
+  if (serializerRegistryCode) {
+    remapped = remapErrorStack(
+      remapped,
+      WORKFLOW_SERIALIZER_REGISTRY_FILENAME,
+      serializerRegistryCode
+    );
+  }
+  const parsedName = parseWorkflowName(workflowName);
+  const filename = parsedName?.moduleSpecifier || workflowName;
+  remapped = remapErrorStack(remapped, filename, workflowCode);
+  return remapErrorStack(remapped, BASELINE_BUNDLE_FILENAME, workflowCode);
+}
+
 /**
  * Run a workflow using the QuickJS WASM VM engine.
  *
@@ -688,6 +712,7 @@ async function dispatchPendingOps(params: {
  * assume parity with the node engine on this axis.
  */
 export async function runWorkflowWithQuickJS(params: {
+  serializerRegistryCode?: string;
   workflowCode: string;
   workflowName: string;
   workflowRun: WorkflowRun;
@@ -761,6 +786,7 @@ export async function runWorkflowWithQuickJS(params: {
   nextTraceCarrier?: () => Promise<Record<string, string>>;
 }): Promise<{ timeoutSeconds?: number } | void> {
   const {
+    serializerRegistryCode,
     workflowCode,
     workflowName,
     workflowRun,
@@ -789,6 +815,9 @@ export async function runWorkflowWithQuickJS(params: {
   // stack-trace line lookups, so the few-MB base64 comment would bloat
   // the VM heap for no benefit.
   const workflowCodeForVM = stripInlineSourceMap(workflowCode);
+  const serializerRegistryCodeForVM = serializerRegistryCode
+    ? stripInlineSourceMap(serializerRegistryCode)
+    : undefined;
 
   // Per-invocation diagnostic id so debug logs can be correlated even if
   // the same runId is processed by overlapping invocations on different
@@ -948,6 +977,7 @@ export async function runWorkflowWithQuickJS(params: {
   });
 
   const session = await startQuickJSWorkflow({
+    serializerRegistryCode: serializerRegistryCodeForVM,
     // Pass the STRIPPED bundle to the VM so the inline source map
     // doesn't end up in the QuickJS heap. The original (unstripped)
     // `workflowCode` is still kept in this host-side scope and is used
@@ -1762,13 +1792,11 @@ export async function runWorkflowWithQuickJS(params: {
     // early-exits on a cheap includes() when a filename has no frames.
     let errorStack = result.failed.stack;
     if (errorStack) {
-      const parsedName = parseWorkflowName(workflowName);
-      const filename = parsedName?.moduleSpecifier || workflowName;
-      errorStack = remapErrorStack(errorStack, filename, workflowCode);
-      errorStack = remapErrorStack(
+      errorStack = remapWorkflowStack(
         errorStack,
-        BASELINE_BUNDLE_FILENAME,
-        workflowCode
+        workflowName,
+        workflowCode,
+        serializerRegistryCode
       );
     }
 
@@ -1857,17 +1885,11 @@ export async function runWorkflowWithQuickJS(params: {
           'stack' in (hydrated as object) &&
           typeof (hydrated as { stack?: unknown }).stack === 'string'
         ) {
-          const parsedName = parseWorkflowName(workflowName);
-          const filename = parsedName?.moduleSpecifier || workflowName;
-          // Both filename spaces — see the failed-branch comment above.
-          (hydrated as { stack?: string }).stack = remapErrorStack(
-            remapErrorStack(
-              (hydrated as { stack: string }).stack,
-              filename,
-              workflowCode
-            ),
-            BASELINE_BUNDLE_FILENAME,
-            workflowCode
+          (hydrated as { stack?: string }).stack = remapWorkflowStack(
+            (hydrated as { stack: string }).stack,
+            workflowName,
+            workflowCode,
+            serializerRegistryCode
           );
         }
         // Walk the cause chain and remap nested stacks too.
@@ -1877,13 +1899,11 @@ export async function runWorkflowWithQuickJS(params: {
           seen.add(node as object);
           const nodeStack = (node as { stack?: unknown }).stack;
           if (typeof nodeStack === 'string') {
-            const parsedName = parseWorkflowName(workflowName);
-            const filename = parsedName?.moduleSpecifier || workflowName;
-            // Both filename spaces — see the failed-branch comment above.
-            (node as { stack?: string }).stack = remapErrorStack(
-              remapErrorStack(nodeStack, filename, workflowCode),
-              BASELINE_BUNDLE_FILENAME,
-              workflowCode
+            (node as { stack?: string }).stack = remapWorkflowStack(
+              nodeStack,
+              workflowName,
+              workflowCode,
+              serializerRegistryCode
             );
           }
           node = (node as { cause?: unknown }).cause;
