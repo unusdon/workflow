@@ -1,5 +1,14 @@
 # @workflow/web-shared
 
+## 5.0.0-beta.44
+
+### Patch Changes
+
+- [#3684](https://github.com/vercel/workflow/pull/3684) [`4bd533d`](https://github.com/vercel/workflow/commit/4bd533de172a7b56ab1ca40038311dff7d28d1ae) Thanks [@karthikscale3](https://github.com/karthikscale3)! - Display short step names when observability events contain a workflow-prefixed name.
+
+- Updated dependencies [[`5b5a926`](https://github.com/vercel/workflow/commit/5b5a926f8850ec5d967e090cc0500028fd53e2ef)]:
+  - @workflow/core@5.0.0-beta.44
+
 ## 5.0.0-beta.43
 
 ### Patch Changes

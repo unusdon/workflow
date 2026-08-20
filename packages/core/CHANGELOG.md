@@ -1,5 +1,11 @@
 # @workflow/core
 
+## 5.0.0-beta.44
+
+### Patch Changes
+
+- [#3675](https://github.com/vercel/workflow/pull/3675) [`5b5a926`](https://github.com/vercel/workflow/commit/5b5a926f8850ec5d967e090cc0500028fd53e2ef) Thanks [@TooTallNate](https://github.com/TooTallNate)! - Step-argument serialization failures now fail the step with a catchable `SerializationError` (via a `step_failed` event, like a step-body failure) instead of failing the run from outside the workflow, and when uncaught they fail the run immediately as a `USER_ERROR` rather than retrying until max queue deliveries.
+
 ## 5.0.0-beta.43
 
 ### Patch Changes
